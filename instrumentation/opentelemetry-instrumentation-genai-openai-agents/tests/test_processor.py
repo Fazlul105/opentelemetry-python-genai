@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import gc
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -13,6 +14,7 @@ from agents.tracing.span_data import (
     FunctionSpanData,
     GenerationSpanData,
     HandoffSpanData,
+    MCPListToolsSpanData,
     ResponseSpanData,
 )
 
@@ -23,7 +25,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -390,3 +392,142 @@ def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
     gc.collect()
 
     assert len(processor._invocations) == 0
+
+
+def test_mcp_list_tools_span_attributes_and_content_capture(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span_data = MCPListToolsSpanData(
+        server="filesystem_server",
+        result=["read_file", "write_file", "list_dir"],
+    )
+    span = _Span(span_data)
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (mcp_span,) = span_exporter.get_finished_spans()
+    assert mcp_span.name == "list_tools filesystem_server"
+    assert mcp_span.kind is SpanKind.CLIENT
+    assert mcp_span.attributes is not None
+    assert mcp_span.attributes["gen_ai.operation.name"] == "list_tools"
+    assert mcp_span.attributes["gen_ai.tool.name"] == "filesystem_server"
+    assert mcp_span.attributes["server.address"] == "filesystem_server"
+    assert mcp_span.attributes["gen_ai.tool.type"] == "function"
+    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert json.loads(mcp_span.attributes["gen_ai.tool.definitions"]) == [
+        "read_file",
+        "write_file",
+        "list_dir",
+    ]
+    assert json.loads(mcp_span.attributes["gen_ai.tool.call.result"]) == [
+        "read_file",
+        "write_file",
+        "list_dir",
+    ]
+
+
+def test_mcp_list_tools_empty_server_and_result(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(MCPListToolsSpanData(server=None, result=None))
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (mcp_span,) = span_exporter.get_finished_spans()
+    assert mcp_span.name == "list_tools"
+    assert mcp_span.kind is SpanKind.CLIENT
+    assert mcp_span.attributes is not None
+    assert mcp_span.attributes["gen_ai.operation.name"] == "list_tools"
+    assert mcp_span.attributes["gen_ai.tool.type"] == "function"
+    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert "gen_ai.tool.name" not in mcp_span.attributes
+    assert "server.address" not in mcp_span.attributes
+    assert "gen_ai.tool.definitions" not in mcp_span.attributes
+    assert "gen_ai.tool.call.result" not in mcp_span.attributes
+
+
+def test_mcp_list_tools_skips_content_when_capture_disabled(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, raising=False
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span_data = MCPListToolsSpanData(
+        server="weather_server",
+        result=["get_weather"],
+    )
+    span = _Span(span_data)
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (mcp_span,) = span_exporter.get_finished_spans()
+    assert mcp_span.name == "list_tools weather_server"
+    assert mcp_span.kind is SpanKind.CLIENT
+    assert mcp_span.attributes is not None
+    assert mcp_span.attributes["gen_ai.operation.name"] == "list_tools"
+    assert mcp_span.attributes["gen_ai.tool.name"] == "weather_server"
+    assert mcp_span.attributes["server.address"] == "weather_server"
+    assert mcp_span.attributes["gen_ai.tool.type"] == "function"
+    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert "gen_ai.tool.definitions" not in mcp_span.attributes
+    assert "gen_ai.tool.call.result" not in mcp_span.attributes
+
+
+def test_mcp_list_tools_duck_typing(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    class DuckMCPListTools:
+        type = "mcp_tools"
+        server = "custom_mcp"
+        result = ["custom_tool"]
+
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(DuckMCPListTools())
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (mcp_span,) = span_exporter.get_finished_spans()
+    assert mcp_span.name == "list_tools custom_mcp"
+    assert mcp_span.kind is SpanKind.CLIENT
+    assert mcp_span.attributes is not None
+    assert mcp_span.attributes["gen_ai.operation.name"] == "list_tools"
+    assert mcp_span.attributes["gen_ai.tool.name"] == "custom_mcp"
+    assert mcp_span.attributes["server.address"] == "custom_mcp"
+
+
+def test_mcp_list_tools_error_sets_error_status_and_type(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(MCPListToolsSpanData(server="remote_server", result=None))
+    span.error = {"message": "MCP server connection refused", "data": {}}
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (mcp_span,) = span_exporter.get_finished_spans()
+    assert mcp_span.status.status_code is StatusCode.ERROR
+    assert mcp_span.attributes is not None
+    assert mcp_span.attributes["error.type"] == "_OTHER"
