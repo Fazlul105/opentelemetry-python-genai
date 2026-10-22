@@ -46,7 +46,7 @@ from agents.tracing.span_data import (
 try:
     from agents.tracing.span_data import MCPListToolsSpanData
 except ImportError:  # pragma: no cover
-    MCPListToolsSpanData = None  # type: ignore[assignment]
+    MCPListToolsSpanData = None
 
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
