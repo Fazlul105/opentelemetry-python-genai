@@ -8,9 +8,6 @@ from typing import Any, cast
 
 from opentelemetry._logs import Logger
 from opentelemetry.context import Context
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.semconv._incubating.attributes.mcp_attributes import (
     MCP_METHOD_NAME,
     McpMethodNameValues,
@@ -21,7 +18,6 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
-    _json_dumps_unless_str,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
@@ -177,9 +173,7 @@ class DiscoveryInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        attributes: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OUTPUT_TYPE: GenAI.GenAiOutputTypeValues.JSON.value,
-        }
+        attributes: dict[str, AttributeValue] = {}
         if self._tool_definitions:
             content_attrs = get_content_attributes(
                 input_messages=[],
@@ -190,13 +184,6 @@ class DiscoveryInvocation(GenAIInvocation):
                 content_capturing_mode=self._content_capturing_mode,
             )
             attributes.update(content_attrs)
-        if (
-            self.tool_result is not None
-            and self._should_capture_content_on_span
-        ):
-            serialized_result = _json_dumps_unless_str(self.tool_result)
-            if serialized_result is not None:
-                attributes[GenAI.GEN_AI_TOOL_CALL_RESULT] = serialized_result
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._call_completion_hook(

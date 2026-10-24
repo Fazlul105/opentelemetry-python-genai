@@ -421,16 +421,12 @@ def test_mcp_list_tools_span_attributes_and_content_capture(
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "gen_ai.tool.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
-    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert "gen_ai.output.type" not in mcp_span.attributes
+    assert "gen_ai.tool.call.result" not in mcp_span.attributes
     assert json.loads(mcp_span.attributes["gen_ai.tool.definitions"]) == [
         {"name": "read_file", "type": "function"},
         {"name": "write_file", "type": "function"},
         {"name": "list_dir", "type": "function"},
-    ]
-    assert json.loads(mcp_span.attributes["gen_ai.tool.call.result"]) == [
-        "read_file",
-        "write_file",
-        "list_dir",
     ]
 
 
@@ -453,7 +449,7 @@ def test_mcp_list_tools_empty_server_and_result(
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "gen_ai.tool.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
-    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert "gen_ai.output.type" not in mcp_span.attributes
     assert "gen_ai.tool.definitions" not in mcp_span.attributes
     assert "gen_ai.tool.call.result" not in mcp_span.attributes
 
@@ -485,7 +481,7 @@ def test_mcp_list_tools_skips_content_when_capture_disabled(
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "gen_ai.tool.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
-    assert mcp_span.attributes["gen_ai.output.type"] == "json"
+    assert "gen_ai.output.type" not in mcp_span.attributes
     assert "gen_ai.tool.definitions" not in mcp_span.attributes
     assert "gen_ai.tool.call.result" not in mcp_span.attributes
 
@@ -516,6 +512,7 @@ def test_mcp_list_tools_skips_span_content_in_event_only_mode(
     assert mcp_span.attributes["mcp.method.name"] == "tools/list"
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
+    assert "gen_ai.output.type" not in mcp_span.attributes
     assert "gen_ai.tool.definitions" not in mcp_span.attributes
     assert "gen_ai.tool.call.result" not in mcp_span.attributes
 
@@ -549,6 +546,7 @@ def test_mcp_list_tools_skips_span_content_with_hook_only_capture(
     assert mcp_span.attributes["mcp.method.name"] == "tools/list"
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
+    assert "gen_ai.output.type" not in mcp_span.attributes
     assert "gen_ai.tool.definitions" not in mcp_span.attributes
     assert "gen_ai.tool.call.result" not in mcp_span.attributes
 
@@ -583,6 +581,8 @@ def test_mcp_list_tools_duck_typing(
     assert "gen_ai.operation.name" not in mcp_span.attributes
     assert "gen_ai.tool.name" not in mcp_span.attributes
     assert "server.address" not in mcp_span.attributes
+    assert "gen_ai.output.type" not in mcp_span.attributes
+    assert "gen_ai.tool.call.result" not in mcp_span.attributes
 
 
 def test_mcp_list_tools_error_sets_error_status_and_type(
@@ -603,3 +603,5 @@ def test_mcp_list_tools_error_sets_error_status_and_type(
     assert mcp_span.attributes["error.type"] == "_OTHER"
     assert mcp_span.attributes["mcp.method.name"] == "tools/list"
     assert mcp_span.name == "tools/list"
+    assert "gen_ai.output.type" not in mcp_span.attributes
+    assert "gen_ai.tool.call.result" not in mcp_span.attributes

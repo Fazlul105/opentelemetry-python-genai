@@ -50,6 +50,8 @@ class TestDiscoveryHandler(TestCase):
         self.assertNotIn("gen_ai.operation.name", span.attributes)
         self.assertNotIn("server.address", span.attributes)
         self.assertNotIn("gen_ai.tool.name", span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
 
     def test_discovery_with_explicit_server_address(self) -> None:
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
@@ -105,10 +107,8 @@ class TestDiscoveryHandler(TestCase):
                 "type": "function",
             },
         )
-        self.assertEqual(
-            json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT]),
-            ["read_file", "write_file", "list_dir"],
-        )
+        self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",
@@ -127,6 +127,7 @@ class TestDiscoveryHandler(TestCase):
         assert span.attributes is not None
         self.assertNotIn(GenAI.GEN_AI_TOOL_DEFINITIONS, span.attributes)
         self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",
@@ -149,6 +150,7 @@ class TestDiscoveryHandler(TestCase):
         assert span.attributes is not None
         self.assertNotIn(GenAI.GEN_AI_TOOL_DEFINITIONS, span.attributes)
         self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
 
         hook.on_completion.assert_called_once()
         kwargs = hook.on_completion.call_args.kwargs
@@ -174,3 +176,5 @@ class TestDiscoveryHandler(TestCase):
         self.assertEqual(span.name, "tools/list")
         assert span.attributes is not None
         self.assertEqual(span.attributes[MCP_METHOD_NAME], "tools/list")
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
+        self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
