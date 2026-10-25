@@ -47,7 +47,11 @@ def _to_tool_definitions(
             name_str = str(raw_name)
             raw_desc = mapping.get("description")
             desc = str(raw_desc) if raw_desc is not None else None
-            params = mapping.get("parameters") or mapping.get("input_schema")
+            params = mapping.get("inputSchema")
+            if params is None:
+                params = mapping.get("input_schema")
+            if params is None:
+                params = mapping.get("parameters")
             if desc is not None or params is not None:
                 defs.append(
                     FunctionToolDefinition(
@@ -75,9 +79,11 @@ def _to_tool_definitions(
             name_str = str(raw_name)
             raw_desc = getattr(item, "description", None)
             desc = str(raw_desc) if raw_desc is not None else None
-            params = getattr(
-                item, "input_schema", getattr(item, "parameters", None)
-            )
+            params = getattr(item, "inputSchema", None)
+            if params is None:
+                params = getattr(item, "input_schema", None)
+            if params is None:
+                params = getattr(item, "parameters", None)
             if desc is not None or params is not None:
                 defs.append(
                     FunctionToolDefinition(
@@ -174,7 +180,7 @@ class DiscoveryInvocation(GenAIInvocation):
         if error is not None:
             self._apply_error_attributes(error)
         attributes: dict[str, AttributeValue] = {}
-        if self._tool_definitions:
+        if self.span.is_recording() and self._tool_definitions:
             content_attrs = get_content_attributes(
                 input_messages=[],
                 output_messages=[],

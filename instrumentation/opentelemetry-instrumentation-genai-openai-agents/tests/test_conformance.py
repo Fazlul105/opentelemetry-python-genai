@@ -20,12 +20,16 @@ from opentelemetry.test_util_genai.conformance import (
     run_conformance,
 )
 
+from .conformance.discovery import DiscoveryScenario
 from .conformance.orchestration import OrchestrationScenario
 
 
 @pytest.mark.parametrize(
     "scenario",
-    [pytest.param(OrchestrationScenario())],
+    [
+        pytest.param(OrchestrationScenario()),
+        pytest.param(DiscoveryScenario()),
+    ],
     ids=lambda s: type(s).__name__,
 )
 def test_conformance(

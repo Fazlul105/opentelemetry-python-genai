@@ -155,6 +155,9 @@ class GenAITracingProcessor(TracingProcessor):
         invocation = self._invocations.pop(span, None)
         if invocation is None:
             return
+        if getattr(span.span_data, "_cached", False):
+            invocation.suspend()
+            return
         if (
             isinstance(invocation, ToolInvocation)
             and isinstance(span.span_data, FunctionSpanData)
@@ -164,13 +167,14 @@ class GenAITracingProcessor(TracingProcessor):
             if arguments:
                 invocation.arguments = tool_arguments_to_any_value(arguments)
             invocation.tool_result = object_to_any_value(span.span_data.output)
-        elif isinstance(
-            invocation, DiscoveryInvocation
-        ) and _is_mcp_list_tools_span(span.span_data):
+        elif (
+            isinstance(invocation, DiscoveryInvocation)
+            and _is_mcp_list_tools_span(span.span_data)
+            and invocation.should_capture_content
+        ):
             result = getattr(span.span_data, "result", None)
             if result is not None:
                 invocation.tool_definitions = result
-                invocation.tool_result = result
         # SpanError is a mapping, not a raised exception, so it never
         # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)

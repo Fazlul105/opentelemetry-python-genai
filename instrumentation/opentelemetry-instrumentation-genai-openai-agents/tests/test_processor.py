@@ -605,3 +605,139 @@ def test_mcp_list_tools_error_sets_error_status_and_type(
     assert mcp_span.name == "tools/list"
     assert "gen_ai.output.type" not in mcp_span.attributes
     assert "gen_ai.tool.call.result" not in mcp_span.attributes
+
+
+def test_mcp_cached_discovery_skips_span_emission(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span_data = MCPListToolsSpanData(
+        server="cached_server",
+        result=["cached_tool"],
+    )
+    setattr(span_data, "_cached", True)
+    span = _Span(span_data)
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    assert len(span_exporter.get_finished_spans()) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_repeated_discovery_with_caching(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    from agents.mcp.server import _MCPServerWithClientSession
+    from agents.mcp.util import MCPUtil
+    from agents.tracing import trace
+    from mcp.types import (
+        CallToolResult,
+        GetPromptResult,
+        ListPromptsResult,
+        ListToolsResult,
+    )
+    from mcp.types import (
+        Tool as MCPTool,
+    )
+
+    from opentelemetry.instrumentation.genai.openai_agents import (
+        OpenAIAgentsInstrumentor,
+    )
+
+    class DummyMCPServer(_MCPServerWithClientSession):
+        def __init__(self, cache_tools_list: bool = True) -> None:
+            super().__init__(
+                cache_tools_list=cache_tools_list,
+                client_session_timeout_seconds=None,
+            )
+            self._name = "dummy_mcp"
+            self.tool = MCPTool(
+                name="dummy_tool",
+                description="desc",
+                inputSchema={"type": "object"},
+            )
+
+        def create_streams(self) -> Any:
+            pass
+
+        @property
+        def name(self) -> str:
+            return self._name
+
+        async def connect(self) -> None:
+            self.session = MagicMock()
+
+        async def cleanup(self) -> None:
+            pass
+
+        async def _list_tools_page(
+            self, session: Any, cursor: str | None = None
+        ) -> ListToolsResult:
+            return ListToolsResult(tools=[self.tool])
+
+        async def call_tool(
+            self,
+            tool_name: str,
+            arguments: dict[str, Any] | None,
+            meta: dict[str, Any] | None = None,
+        ) -> CallToolResult:
+            return CallToolResult(content=[])
+
+        async def list_prompts(
+            self, run_context: Any = None, agent: Any = None
+        ) -> ListPromptsResult:
+            return ListPromptsResult(prompts=[])
+
+        async def get_prompt(
+            self,
+            name: str,
+            arguments: dict[str, Any] | None = None,
+            run_context: Any = None,
+            agent: Any = None,
+        ) -> GetPromptResult:
+            return GetPromptResult(messages=[])
+
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        server = DummyMCPServer(cache_tools_list=True)
+        await server.connect()
+        # First discovery: makes actual request, emits tools/list span
+        with trace("workflow_1"):
+            await MCPUtil._list_tools_with_span(server, None, None)
+
+        finished = span_exporter.get_finished_spans()
+        discovery_spans = [s for s in finished if s.name == "tools/list"]
+        assert len(discovery_spans) == 1
+
+        span_exporter.clear()
+
+        # Second discovery: returned from cache, must NOT emit tools/list span
+        with trace("workflow_2"):
+            await MCPUtil._list_tools_with_span(server, None, None)
+
+        finished_2 = span_exporter.get_finished_spans()
+        discovery_spans_2 = [s for s in finished_2 if s.name == "tools/list"]
+        assert len(discovery_spans_2) == 0
+
+        span_exporter.clear()
+
+        # Now test with cache_tools_list=False: both discoveries emit tools/list
+        uncached_server = DummyMCPServer(cache_tools_list=False)
+        await uncached_server.connect()
+        with trace("workflow_uncached_1"):
+            await MCPUtil._list_tools_with_span(uncached_server, None, None)
+        with trace("workflow_uncached_2"):
+            await MCPUtil._list_tools_with_span(uncached_server, None, None)
+
+        finished_uncached = span_exporter.get_finished_spans()
+        uncached_discovery_spans = [
+            s for s in finished_uncached if s.name == "tools/list"
+        ]
+        assert len(uncached_discovery_spans) == 2
+    finally:
+        instrumentor.uninstrument()

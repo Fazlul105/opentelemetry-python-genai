@@ -178,3 +178,147 @@ class TestDiscoveryHandler(TestCase):
         self.assertEqual(span.attributes[MCP_METHOD_NAME], "tools/list")
         self.assertNotIn(GenAI.GEN_AI_OUTPUT_TYPE, span.attributes)
         self.assertNotIn(GenAI.GEN_AI_TOOL_CALL_RESULT, span.attributes)
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.SPAN_ONLY,
+    )
+    def test_discovery_normalizes_mapping_input_schema_and_empty_parameters(
+        self, _mock_cap: MagicMock
+    ) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.discovery()
+        invocation.tool_definitions = [
+            {
+                "name": "tool_with_input_schema_camel",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                },
+            },
+            {
+                "name": "tool_with_input_schema_snake",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"v": {"type": "integer"}},
+                },
+            },
+            {
+                "name": "tool_with_empty_parameters",
+                "parameters": {},
+            },
+        ]
+        invocation.stop()
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        definitions = json.loads(
+            span.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+        )
+        self.assertEqual(len(definitions), 3)
+        self.assertEqual(
+            definitions[0]["name"], "tool_with_input_schema_camel"
+        )
+        self.assertEqual(
+            definitions[0]["parameters"],
+            {"type": "object", "properties": {"q": {"type": "string"}}},
+        )
+        self.assertEqual(
+            definitions[1]["name"], "tool_with_input_schema_snake"
+        )
+        self.assertEqual(
+            definitions[1]["parameters"],
+            {"type": "object", "properties": {"v": {"type": "integer"}}},
+        )
+        self.assertEqual(definitions[2]["name"], "tool_with_empty_parameters")
+        self.assertEqual(definitions[2]["parameters"], {})
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.SPAN_ONLY,
+    )
+    def test_discovery_normalizes_object_input_schema_and_empty_parameters(
+        self, _mock_cap: MagicMock
+    ) -> None:
+        class ObjectWithCamelInputSchema:
+            name = "obj_camel"
+            description = "Camel desc"
+            inputSchema = {
+                "type": "object",
+                "properties": {"a": {"type": "string"}},
+            }
+
+        class ObjectWithSnakeInputSchema:
+            name = "obj_snake"
+            input_schema = {
+                "type": "object",
+                "properties": {"b": {"type": "string"}},
+            }
+
+        class ObjectWithEmptyParameters:
+            name = "obj_empty_params"
+            parameters = {}
+
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.discovery()
+        invocation.tool_definitions = [
+            ObjectWithCamelInputSchema(),
+            ObjectWithSnakeInputSchema(),
+            ObjectWithEmptyParameters(),
+        ]
+        invocation.stop()
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        definitions = json.loads(
+            span.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS]
+        )
+        self.assertEqual(len(definitions), 3)
+        self.assertEqual(definitions[0]["name"], "obj_camel")
+        self.assertEqual(
+            definitions[0]["parameters"],
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+        )
+        self.assertEqual(definitions[1]["name"], "obj_snake")
+        self.assertEqual(
+            definitions[1]["parameters"],
+            {"type": "object", "properties": {"b": {"type": "string"}}},
+        )
+        self.assertEqual(definitions[2]["name"], "obj_empty_params")
+        self.assertEqual(definitions[2]["parameters"], {})
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.SPAN_ONLY,
+    )
+    def test_discovery_skips_building_content_attributes_when_span_not_recording(
+        self, _mock_cap: MagicMock
+    ) -> None:
+        from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+
+        sampler_provider = TracerProvider(sampler=ALWAYS_OFF)
+        hook = MagicMock()
+        handler = TelemetryHandler(
+            tracer_provider=sampler_provider,
+            completion_hook=hook,
+        )
+        invocation = handler.discovery()
+        self.assertFalse(invocation.span.is_recording())
+        invocation.tool_definitions = [
+            {
+                "name": "sampled_out_tool",
+                "parameters": {"type": "object"},
+            }
+        ]
+        with patch(
+            "opentelemetry.util.genai._discovery_invocation.get_content_attributes"
+        ) as mock_get_content:
+            invocation.stop()
+            mock_get_content.assert_not_called()
+
+        hook.on_completion.assert_called_once()
+        kwargs = hook.on_completion.call_args.kwargs
+        self.assertEqual(len(kwargs["tool_definitions"]), 1)
+        self.assertEqual(
+            kwargs["tool_definitions"][0].name, "sampled_out_tool"
+        )
