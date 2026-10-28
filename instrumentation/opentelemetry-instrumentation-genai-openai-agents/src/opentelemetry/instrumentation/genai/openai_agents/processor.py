@@ -16,8 +16,6 @@ started the agents-library span:
   ``asyncio.Task`` the agents library creates for tool dispatch. That
   sub-task inherits a snapshot of the run-loop context (so workflow +
   agent are already active in OTel contextvars).
-* MCP list tools (``MCPListToolsSpanData``) spans start when tool
-  discovery requests are dispatched to an MCP server.
 
 Because every ``*_end`` callback fires on the same task as its
 matching ``*_start``, util-genai's auto-``attach()`` / ``detach()`` of
@@ -25,7 +23,7 @@ OTel context is balanced and no context tokens leak across tasks.
 OTel's natural parent tracking nests the tree:
 
     workflow > invoke_agent > [chat from openai instrumentation,
-                               execute_tool, tools/list]
+                               execute_tool]
 
 LLM-level spans (``chat`` / ``responses`` / ``embeddings``) are not
 emitted here — ``opentelemetry-instrumentation-genai-openai`` patches
@@ -43,17 +41,11 @@ from agents.tracing.span_data import (
     FunctionSpanData,
 )
 
-try:
-    from agents.tracing.span_data import MCPListToolsSpanData
-except ImportError:  # pragma: no cover
-    MCPListToolsSpanData = None
-
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    DiscoveryInvocation,
     LocalAgentInvocation,
     ToolInvocation,
     WorkflowInvocation,
@@ -68,19 +60,6 @@ from opentelemetry.util.genai.utils import (
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
 _WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
-
-
-def _is_mcp_list_tools_span(span_data: Any) -> bool:
-    if MCPListToolsSpanData is not None and isinstance(
-        span_data, MCPListToolsSpanData
-    ):
-        return True
-    if getattr(span_data, "type", None) == "mcp_tools":
-        return True
-    return (
-        getattr(span_data, "__class__", None) is not None
-        and span_data.__class__.__name__ == "MCPListToolsSpanData"
-    )
 
 
 class GenAITracingProcessor(TracingProcessor):
@@ -98,11 +77,7 @@ class GenAITracingProcessor(TracingProcessor):
         self._handler = handler
         self._provider = provider
         self._invocations: weakref.WeakKeyDictionary[
-            Any,
-            WorkflowInvocation
-            | LocalAgentInvocation
-            | ToolInvocation
-            | DiscoveryInvocation,
+            Any, WorkflowInvocation | LocalAgentInvocation | ToolInvocation
         ] = weakref.WeakKeyDictionary()
 
     def on_trace_start(self, trace: Trace) -> None:
@@ -142,21 +117,16 @@ class GenAITracingProcessor(TracingProcessor):
             )
             self._invocations[span] = invocation
             return
-        if _is_mcp_list_tools_span(span_data):
-            invocation = self._handler.discovery()
-            self._invocations[span] = invocation
-            return
         # Other span_data types (GenerationSpanData, ResponseSpanData,
-        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData)
-        # are intentionally ignored. LLM-level spans come from the openai
-        # instrumentation; the rest have no semconv yet.
+        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData,
+        # MCPListToolsSpanData) are intentionally ignored. LLM-level spans
+        # come from the openai instrumentation; MCP client spans belong to
+        # the MCP layer (e.g. native tracing in mcp>=2.2 or dedicated MCP
+        # instrumentation); the rest have no semconv yet.
 
     def on_span_end(self, span: Span[Any]) -> None:
         invocation = self._invocations.pop(span, None)
         if invocation is None:
-            return
-        if getattr(span.span_data, "_cached", False):
-            invocation.suspend()
             return
         if (
             isinstance(invocation, ToolInvocation)
@@ -167,14 +137,6 @@ class GenAITracingProcessor(TracingProcessor):
             if arguments:
                 invocation.arguments = tool_arguments_to_any_value(arguments)
             invocation.tool_result = object_to_any_value(span.span_data.output)
-        elif (
-            isinstance(invocation, DiscoveryInvocation)
-            and _is_mcp_list_tools_span(span.span_data)
-            and invocation.should_capture_content
-        ):
-            result = getattr(span.span_data, "result", None)
-            if result is not None:
-                invocation.tool_definitions = result
         # SpanError is a mapping, not a raised exception, so it never
         # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)

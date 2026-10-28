@@ -1,1 +1,1 @@
-Support MCPListToolsSpanData in span processor.
+Document and verify that MCPListToolsSpanData spans are intentionally unmapped to rely on MCP layer tracing.

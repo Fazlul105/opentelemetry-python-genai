@@ -60,32 +60,6 @@ __all__ = ["OpenAIAgentsInstrumentor"]
 logger = logging.getLogger(__name__)
 
 
-async def _wrap_mcp_server_list_tools(
-    wrapped: Any,
-    instance: Any,
-    args: Any,
-    kwargs: Any,
-) -> Any:
-    is_cached = bool(
-        getattr(instance, "cache_tools_list", False)
-        and not getattr(instance, "_cache_dirty", False)
-        and getattr(instance, "_tools_list", None)
-    )
-    if is_cached:
-        try:
-            from agents.tracing import get_current_span
-
-            current_span = get_current_span()
-            if (
-                current_span is not None
-                and getattr(current_span, "span_data", None) is not None
-            ):
-                setattr(current_span.span_data, "_cached", True)
-        except Exception:  # pylint: disable=broad-except
-            pass
-    return await wrapped(*args, **kwargs)
-
-
 class OpenAIAgentsInstrumentor(BaseInstrumentor):
     """Instrument the openai-agents library.
 
@@ -132,22 +106,6 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)
 
-        try:
-            import wrapt
-
-            wrapt.wrap_function_wrapper(
-                "agents.mcp.server",
-                "_MCPServerWithClientSession.list_tools",
-                _wrap_mcp_server_list_tools,
-            )
-            wrapt.wrap_function_wrapper(
-                "agents.mcp.server",
-                "MCPServer.list_tools",
-                _wrap_mcp_server_list_tools,
-            )
-        except (ImportError, AttributeError):
-            pass
-
         if kwargs.get("disable_openai_trace_export"):
             trace_provider = get_trace_provider()
             current = getattr(
@@ -163,19 +121,6 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._processor is None:
             return
-
-        try:
-            from agents.mcp.server import (
-                MCPServer,
-                _MCPServerWithClientSession,
-            )
-
-            from opentelemetry.instrumentation.utils import unwrap
-
-            unwrap(_MCPServerWithClientSession, "list_tools")
-            unwrap(MCPServer, "list_tools")
-        except (ImportError, AttributeError):
-            pass
 
         if self._previous_processors is not None:
             set_trace_processors(list(self._previous_processors))
